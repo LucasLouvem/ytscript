@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YTScript</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>YTScript</h1>
+      <p>Transcreva vídeos do YouTube com facilidade</p>
+    </header>
+
+    <main class="layout">
+      <div class="column">
+        <section class="card">
+          <h2>Link do vídeo</h2>
+          <p class="hint">Cole o link do YouTube para gerar a transcrição</p>
+          <form id="form" class="url-row">
+            <div class="input-wrap">
+              <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required />
+              <button id="clear-url" class="icon-button" type="button" aria-label="Limpar campo">&times;</button>
+            </div>
+            <button id="submit" class="primary" type="submit">Transcrever</button>
+          </form>
+          <p id="error" class="error" role="alert" hidden></p>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <h2>Transcrição</h2>
+            <div class="header-actions">
+              <button id="copy" type="button" disabled>Copiar</button>
+              <button id="download" type="button" disabled>Baixar</button>
+            </div>
+          </div>
+          <div class="search-row">
+            <input id="search" type="search" placeholder="Buscar na transcrição..." disabled />
+            <span id="char-count" class="muted">0 caracteres</span>
+          </div>
+          <ol id="transcript" class="transcript">
+            <li class="empty">A transcrição aparece aqui.</li>
+          </ol>
+        </section>
+      </div>
+
+      <div class="side">
+        <section class="card">
+          <div class="video-box">
+            <img id="thumb" alt="" hidden />
+            <span id="thumb-placeholder">Prévia do vídeo</span>
+          </div>
+          <p id="video-title" class="video-title">Título do vídeo</p>
+          <p id="video-meta" class="muted">Canal · visualizações · data</p>
+        </section>
+
+        <div class="side-row">
+          <section class="card">
+            <h2>Opções</h2>
+            <div class="options-grid">
+              <label>
+                Idioma da transcrição
+                <select id="language"><option value="">Automático (pt-BR / pt)</option></select>
+              </label>
+              <label>
+                Formato de saída
+                <select id="format">
+                  <option value="txt">Texto simples (.txt)</option>
+                  <option value="srt">Legenda (.srt)</option>
+                  <option value="md">Markdown (.md)</option>
+                </select>
+              </label>
+              <label>
+                Traduzir para
+                <select id="translate-to"><option value="">Não traduzir</option></select>
+              </label>
+            </div>
+            <label class="toggle"><input id="timestamps" type="checkbox" checked /><span></span>Incluir timestamps</label>
+          </section>
+
+          <section class="card">
+            <h2>Informações</h2>
+            <dl class="info">
+              <div><dt>Duração do vídeo</dt><dd id="duration">—</dd></div>
+              <div><dt>Idioma detectado</dt><dd id="native-language">—</dd></div>
+              <div><dt>Quantidade de linhas</dt><dd id="line-count">—</dd></div>
+              <div><dt>Tempo de processamento</dt><dd id="elapsed">—</dd></div>
+            </dl>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
