@@ -1,0 +1,26 @@
+[project]
+name = "ytscript"
+version = "0.1.0"
+description = "Transcrição com timestamps de vídeos do YouTube via CLI, API HTTP e página web"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["youtube-transcript-api>=1.2.4,<2", "fastapi>=0.162,<1", "uvicorn>=0.54,<1"]
+
+[project.scripts]
+ytscript = "ytscript.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src/api", "."]
+include = ["ytscript*", "infra*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src/api", "."]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
