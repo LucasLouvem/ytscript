@@ -1,0 +1,55 @@
+{
+  "videoDetails": {
+    "videoId": "lq76z9JvuVI",
+    "title": "Brasil Soberano: pronunciamento do presidente Lula em defesa da soberania nacional",
+    "author": "Secretaria-Geral da Presidência da República",
+    "lengthSeconds": "279",
+    "viewCount": "564609",
+    "channelId": "UCBA_JYyJSrpRzWeeEjn_Tnw"
+  },
+  "microformat": {
+    "playerMicroformatRenderer": {
+      "publishDate": "2026-10-26T04:51:47-07:00"
+    }
+  },
+  "captions": {
+    "playerCaptionsTracklistRenderer": {
+      "audioTracks": [
+        {
+          "captionTrackIndices": [
+            0
+          ],
+          "defaultCaptionTrackIndex": 0,
+          "hasDefaultTrack": true,
+          "audioTrackId": "pt-BR.4",
+          "captionsInitialState": "CAPTIONS_INITIAL_STATE_OFF_RECOMMENDED"
+        },
+        {
+          "captionTrackIndices": [
+            0
+          ],
+          "defaultCaptionTrackIndex": 0,
+          "hasDefaultTrack": true,
+          "audioTrackId": "en-US.10",
+          "captionsInitialState": "CAPTIONS_INITIAL_STATE_ON_RECOMMENDED"
+        },
+        {
+          "captionTrackIndices": [
+            0
+          ],
+          "defaultCaptionTrackIndex": 0,
+          "hasDefaultTrack": true,
+          "audioTrackId": "es-US.10",
+          "captionsInitialState": "CAPTIONS_INITIAL_STATE_ON_RECOMMENDED"
+        }
+      ],
+      "defaultAudioTrackIndex": 0,
+      "captionTracks": [
+        {
+          "languageCode": "pt",
+          "kind": "asr"
+        }
+      ]
+    }
+  }
+}

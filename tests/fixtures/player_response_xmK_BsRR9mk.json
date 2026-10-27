@@ -1,0 +1,36 @@
+{
+  "videoDetails": {
+    "videoId": "xmK_BsRR9mk",
+    "title": "Meu plano pra ganhar US$ 6 mil como DEV SÊNIOR em 2026",
+    "author": "Yudi Ganeko",
+    "lengthSeconds": "1349",
+    "viewCount": "7697",
+    "channelId": "UCytbqw88vDLv9mm86JThIlw"
+  },
+  "microformat": {
+    "playerMicroformatRenderer": {
+      "publishDate": "2026-10-27T08:00:22-07:00"
+    }
+  },
+  "captions": {
+    "playerCaptionsTracklistRenderer": {
+      "audioTracks": [
+        {
+          "captionTrackIndices": [
+            0
+          ],
+          "defaultCaptionTrackIndex": 0,
+          "hasDefaultTrack": true,
+          "captionsInitialState": "CAPTIONS_INITIAL_STATE_OFF_RECOMMENDED"
+        }
+      ],
+      "defaultAudioTrackIndex": 0,
+      "captionTracks": [
+        {
+          "languageCode": "pt",
+          "kind": "asr"
+        }
+      ]
+    }
+  }
+}
