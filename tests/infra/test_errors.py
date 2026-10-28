@@ -46,6 +46,24 @@ EXPECTED_BODIES = {
         "action": "Use um vídeo que tenha fala legendada.",
         "status_code": 404,
     },
+    errors.RateLimitExceededError: {
+        "name": "RateLimitExceededError",
+        "message": "Você fez transcrições demais em pouco tempo.",
+        "action": "Aguarde um pouco e tente novamente.",
+        "status_code": 429,
+    },
+    errors.DailyLimitExceededError: {
+        "name": "DailyLimitExceededError",
+        "message": "Você atingiu o limite diário de transcrições.",
+        "action": "Tente novamente amanhã.",
+        "status_code": 429,
+    },
+    errors.GlobalLimitExceededError: {
+        "name": "GlobalLimitExceededError",
+        "message": "O serviço atingiu o limite diário de transcrições de todos os usuários.",
+        "action": "Tente novamente mais tarde.",
+        "status_code": 429,
+    },
     errors.AccessBlockedError: {
         "name": "AccessBlockedError",
         "message": "O YouTube bloqueou ou limitou o acesso.",

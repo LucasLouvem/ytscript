@@ -8,11 +8,13 @@ from pydantic import BaseModel
 
 from infra.errors import InvalidUrlError, YTScriptError
 from ytscript.controllers.transcript_controller import get_transcript_details
+from ytscript.rate_limiter import limiter_from_env
 from ytscript.views.transcript_view import build_details_payload
 
 WEB_DIR = Path(__file__).resolve().parents[3] / "web"
 
 app = FastAPI(title="YTScript")
+rate_limiter = limiter_from_env()
 
 
 class TranscriptRequest(BaseModel):
@@ -23,7 +25,11 @@ class TranscriptRequest(BaseModel):
 
 @app.exception_handler(YTScriptError)
 async def handle_ytscript_error(request: Request, error: YTScriptError) -> JSONResponse:
-    return JSONResponse(status_code=error.status_code, content=error.to_dict())
+    headers = {}
+    retry_after = getattr(error, "retry_after", None)
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return JSONResponse(status_code=error.status_code, content=error.to_dict(), headers=headers)
 
 
 @app.exception_handler(RequestValidationError)
@@ -38,7 +44,8 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/transcripts")
-def create_transcript(body: TranscriptRequest) -> dict:
+def create_transcript(body: TranscriptRequest, request: Request) -> dict:
+    rate_limiter.check(request.client.host if request.client else "unknown")
     details = get_transcript_details(
         body.url, language=body.language, translate_to=body.translate_to
     )

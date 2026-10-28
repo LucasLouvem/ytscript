@@ -108,3 +108,36 @@ class EmptyTranscriptError(YTScriptError):
     message = "A transcrição do vídeo está vazia."
     action = "Use um vídeo que tenha fala legendada."
     status_code = 404
+
+
+class RateLimitExceededError(YTScriptError):
+    name = "RateLimitExceededError"
+    message = "Você fez transcrições demais em pouco tempo."
+    action = "Aguarde um pouco e tente novamente."
+    status_code = 429
+
+    def __init__(self, retry_after: int | None = None) -> None:
+        super().__init__()
+        self.retry_after = retry_after
+
+
+class DailyLimitExceededError(YTScriptError):
+    name = "DailyLimitExceededError"
+    message = "Você atingiu o limite diário de transcrições."
+    action = "Tente novamente amanhã."
+    status_code = 429
+
+    def __init__(self, retry_after: int | None = None) -> None:
+        super().__init__()
+        self.retry_after = retry_after
+
+
+class GlobalLimitExceededError(YTScriptError):
+    name = "GlobalLimitExceededError"
+    message = "O serviço atingiu o limite diário de transcrições de todos os usuários."
+    action = "Tente novamente mais tarde."
+    status_code = 429
+
+    def __init__(self, retry_after: int | None = None) -> None:
+        super().__init__()
+        self.retry_after = retry_after
