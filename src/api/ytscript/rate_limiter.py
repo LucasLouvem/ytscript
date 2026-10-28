@@ -1,5 +1,6 @@
 import math
 import os
+import threading
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -36,23 +37,35 @@ class SlidingWindowRateLimiter:
         self._clock = clock
         self._error_class = error_class
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = threading.RLock()
         self._next_eviction = clock() + window_seconds
 
     def check(self, key: str) -> None:
         """Raises if `key` is over the limit; does not count a hit."""
-        now = self._clock()
-        hits = self._prune(key, now)
-        if len(hits) >= self.limit:
-            raise self._error_class(retry_after=math.ceil(self.window_seconds - (now - hits[0])))
+        with self._lock:
+            now = self._clock()
+            hits = self._prune(key, now)
+            if len(hits) >= self.limit:
+                raise self._error_class(
+                    retry_after=math.ceil(self.window_seconds - (now - hits[0]))
+                )
 
     def hit(self, key: str) -> None:
-        now = self._clock()
-        self._prune(key, now).append(now)
-        if len(self._hits) > EVICT_THRESHOLD and now >= self._next_eviction:
-            self._evict_idle(now)
+        with self._lock:
+            now = self._clock()
+            self._prune(key, now).append(now)
+            if len(self._hits) > EVICT_THRESHOLD and now >= self._next_eviction:
+                self._evict_idle(now)
+
+    def acquire(self, key: str) -> None:
+        """Atomic `check` followed by `hit`."""
+        with self._lock:
+            self.check(key)
+            self.hit(key)
 
     def reset(self) -> None:
-        self._hits.clear()
+        with self._lock:
+            self._hits.clear()
 
     def _prune(self, key: str, now: float) -> deque[float]:
         hits = self._hits[key]
@@ -82,19 +95,22 @@ class RateLimiter:
         self.minute = minute
         self.daily = daily
         self.global_daily = global_daily
+        self._lock = threading.Lock()
 
     def check(self, key: str) -> None:
-        self.global_daily.check(GLOBAL_KEY)
-        self.daily.check(key)
-        self.minute.check(key)
-        self.global_daily.hit(GLOBAL_KEY)
-        self.daily.hit(key)
-        self.minute.hit(key)
+        with self._lock:
+            self.global_daily.check(GLOBAL_KEY)
+            self.daily.check(key)
+            self.minute.check(key)
+            self.global_daily.hit(GLOBAL_KEY)
+            self.daily.hit(key)
+            self.minute.hit(key)
 
     def reset(self) -> None:
-        self.minute.reset()
-        self.daily.reset()
-        self.global_daily.reset()
+        with self._lock:
+            self.minute.reset()
+            self.daily.reset()
+            self.global_daily.reset()
 
 
 def memory_limiter_from_env() -> RateLimiter:

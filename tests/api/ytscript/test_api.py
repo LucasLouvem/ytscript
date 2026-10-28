@@ -1,3 +1,5 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import pytest
@@ -236,3 +238,27 @@ def test_client_key_falls_back_to_socket_on_vercel_without_header(monkeypatch):
 def test_client_key_without_any_address(monkeypatch):
     monkeypatch.delenv("VERCEL", raising=False)
     assert client_key(make_request(host=None)) == "unknown"
+
+
+def test_concurrent_posts_from_one_client_get_exactly_the_limit_through(rate_limiter):
+    barrier = threading.Barrier(40)
+
+    def post(_):
+        barrier.wait()
+        with TestClient(app) as local:
+            return local.post("/api/transcripts", json={"url": URL}).status_code
+
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        with ThreadPoolExecutor(max_workers=40) as pool:
+            statuses = list(pool.map(post, range(40)))
+
+    assert statuses.count(200) == rate_limiter.minute.limit
+    assert statuses.count(429) == 40 - rate_limiter.minute.limit
+    assert set(statuses) == {200, 429}
+
+
+def test_blocked_requests_never_reach_the_transcript_controller(client, rate_limiter):
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS) as get:
+        for _ in range(rate_limiter.minute.limit + 15):
+            client.post("/api/transcripts", json={"url": URL})
+    assert get.call_count == rate_limiter.minute.limit

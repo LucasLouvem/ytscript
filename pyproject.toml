@@ -23,6 +23,7 @@ include = ["ytscript*", "infra*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src/api", "."]
+markers = ["integration: precisa de Docker e de RUN_INTEGRATION=1; fora da suíte padrão"]
 
 [tool.black]
 line-length = 100

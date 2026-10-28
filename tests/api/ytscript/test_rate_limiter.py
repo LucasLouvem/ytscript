@@ -1,3 +1,7 @@
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from infra.errors import DailyLimitExceededError, GlobalLimitExceededError, RateLimitExceededError
@@ -57,6 +61,13 @@ def test_keys_are_independent():
     limiter, _ = make(limit=1)
     use(limiter, "a")
     use(limiter, "b")
+
+
+def test_acquire_checks_and_counts():
+    limiter, _ = make(limit=1)
+    limiter.acquire("a")
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire("a")
 
 
 def test_check_alone_does_not_count():
@@ -215,3 +226,77 @@ def test_limiter_from_env_accepts_vercel_kv_names(no_redis_env, monkeypatch):
 def test_limiter_from_env_needs_both_url_and_token(no_redis_env, monkeypatch):
     monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://example.upstash.io")
     assert isinstance(limiter_from_env(), RateLimiter)
+
+
+def slow_clock():
+    time.sleep(0.0005)
+    return time.monotonic()
+
+
+def run_concurrently(calls, workers=50):
+    barrier = threading.Barrier(workers)
+
+    def attempt(call):
+        barrier.wait()
+        try:
+            call()
+            return True
+        except RateLimitExceededError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(attempt, calls[:workers]))
+
+
+def test_concurrent_requests_from_one_client_never_exceed_the_limit():
+    limiter = SlidingWindowRateLimiter(10, 60, slow_clock)
+    results = run_concurrently([lambda: limiter.acquire("a")] * 50)
+    assert sum(results) == 10
+
+
+def test_concurrent_combined_limiter_never_exceeds_any_limit():
+    minute = SlidingWindowRateLimiter(10, 60, slow_clock)
+    daily = SlidingWindowRateLimiter(100, 86400, slow_clock, DailyLimitExceededError)
+    global_daily = SlidingWindowRateLimiter(20, 86400, slow_clock, GlobalLimitExceededError)
+    limiter = RateLimiter(minute, daily, global_daily)
+
+    def request():
+        try:
+            limiter.check("a")
+            return True
+        except (RateLimitExceededError, DailyLimitExceededError, GlobalLimitExceededError):
+            return False
+
+    with ThreadPoolExecutor(max_workers=50) as pool:
+        results = list(pool.map(lambda _: request(), range(50)))
+    assert sum(results) == 10
+    assert len(minute._hits["a"]) == 10
+
+
+def test_concurrent_requests_from_different_clients_do_not_interfere():
+    limiter = SlidingWindowRateLimiter(1, 60, slow_clock)
+    results = run_concurrently([lambda key=f"ip{i}": limiter.acquire(key) for i in range(50)])
+    assert all(results)
+
+
+def test_many_clients_keep_active_counters_after_eviction(monkeypatch):
+    monkeypatch.setattr("ytscript.rate_limiter.EVICT_THRESHOLD", 100)
+    limiter, clock = make(limit=1, window=60)
+    use(limiter, "active")
+    clock.now = 30
+    for i in range(500):
+        use(limiter, f"ip{i}")
+    clock.now = 61
+    use(limiter, "trigger-eviction")
+    clock.now = 62
+    with pytest.raises(RateLimitExceededError):
+        limiter.check("ip499")
+
+
+def test_idle_clients_do_not_grow_memory_without_bound(monkeypatch):
+    monkeypatch.setattr("ytscript.rate_limiter.EVICT_THRESHOLD", 100)
+    limiter, clock = make(limit=1, window=60)
+    for second in range(0, 600, 1):
+        clock.now = second
+        use(limiter, f"ip{second}")
+    assert len(limiter._hits) < 300
