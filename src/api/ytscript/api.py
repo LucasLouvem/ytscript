@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -11,7 +12,7 @@ from ytscript.controllers.transcript_controller import get_transcript_details
 from ytscript.rate_limiter import limiter_from_env
 from ytscript.views.transcript_view import build_details_payload
 
-WEB_DIR = Path(__file__).resolve().parents[3] / "web"
+WEB_DIR = Path(__file__).resolve().parents[3] / "public"
 
 app = FastAPI(title="YTScript")
 rate_limiter = limiter_from_env()
@@ -21,6 +22,14 @@ class TranscriptRequest(BaseModel):
     url: str
     language: str | None = None
     translate_to: str | None = None
+
+
+def client_key(request: Request) -> str:
+    if os.environ.get("VERCEL"):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 @app.exception_handler(YTScriptError)
@@ -45,11 +54,12 @@ def health() -> dict[str, str]:
 
 @app.post("/api/transcripts")
 def create_transcript(body: TranscriptRequest, request: Request) -> dict:
-    rate_limiter.check(request.client.host if request.client else "unknown")
+    rate_limiter.check(client_key(request))
     details = get_transcript_details(
         body.url, language=body.language, translate_to=body.translate_to
     )
     return build_details_payload(details)
 
 
-app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+if not os.environ.get("VERCEL"):
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

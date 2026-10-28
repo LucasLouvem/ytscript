@@ -10,6 +10,7 @@ from infra.errors import (
     RateLimitExceededError,
     YTScriptError,
 )
+from infra.redis_rate_limiter import RedisLimit, RedisRateLimiter
 
 DEFAULT_LIMIT = 10
 DEFAULT_WINDOW_SECONDS = 60.0
@@ -96,7 +97,7 @@ class RateLimiter:
         self.global_daily.reset()
 
 
-def limiter_from_env() -> RateLimiter:
+def memory_limiter_from_env() -> RateLimiter:
     return RateLimiter(
         minute=SlidingWindowRateLimiter(
             limit=int(os.environ.get("YTSCRIPT_RATE_LIMIT", DEFAULT_LIMIT)),
@@ -112,4 +113,42 @@ def limiter_from_env() -> RateLimiter:
             window_seconds=DAY_SECONDS,
             error_class=GlobalLimitExceededError,
         ),
+    )
+
+
+def redis_credentials_from_env() -> tuple[str, str] | None:
+    url = os.environ.get("UPSTASH_REDIS_REST_URL") or os.environ.get("KV_REST_API_URL")
+    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
+    return (url, token) if url and token else None
+
+
+def limiter_from_env() -> RateLimiter | RedisRateLimiter:
+    credentials = redis_credentials_from_env()
+    if credentials is None:
+        return memory_limiter_from_env()
+    url, token = credentials
+    return RedisRateLimiter(
+        url,
+        token,
+        limits=[
+            RedisLimit(
+                "global",
+                int(os.environ.get("YTSCRIPT_GLOBAL_DAILY_LIMIT", DEFAULT_GLOBAL_DAILY_LIMIT)),
+                DAY_SECONDS,
+                GlobalLimitExceededError,
+                per_client=False,
+            ),
+            RedisLimit(
+                "daily",
+                int(os.environ.get("YTSCRIPT_DAILY_LIMIT", DEFAULT_DAILY_LIMIT)),
+                DAY_SECONDS,
+                DailyLimitExceededError,
+            ),
+            RedisLimit(
+                "minute",
+                int(os.environ.get("YTSCRIPT_RATE_LIMIT", DEFAULT_LIMIT)),
+                float(os.environ.get("YTSCRIPT_RATE_WINDOW", DEFAULT_WINDOW_SECONDS)),
+                RateLimitExceededError,
+            ),
+        ],
     )

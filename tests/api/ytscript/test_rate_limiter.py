@@ -1,7 +1,13 @@
 import pytest
 
 from infra.errors import DailyLimitExceededError, GlobalLimitExceededError, RateLimitExceededError
-from ytscript.rate_limiter import RateLimiter, SlidingWindowRateLimiter, limiter_from_env
+from infra.redis_rate_limiter import RedisRateLimiter
+from ytscript.rate_limiter import (
+    RateLimiter,
+    SlidingWindowRateLimiter,
+    limiter_from_env,
+    memory_limiter_from_env,
+)
 
 
 class FakeClock:
@@ -150,7 +156,7 @@ def test_limiter_from_env(monkeypatch):
     monkeypatch.setenv("YTSCRIPT_RATE_WINDOW", "5")
     monkeypatch.setenv("YTSCRIPT_DAILY_LIMIT", "7")
     monkeypatch.setenv("YTSCRIPT_GLOBAL_DAILY_LIMIT", "50")
-    limiter = limiter_from_env()
+    limiter = memory_limiter_from_env()
     assert (limiter.minute.limit, limiter.minute.window_seconds) == (3, 5.0)
     assert (limiter.daily.limit, limiter.daily.window_seconds) == (7, 86400.0)
     assert (limiter.global_daily.limit, limiter.global_daily.window_seconds) == (50, 86400.0)
@@ -164,7 +170,48 @@ def test_limiter_from_env_defaults(monkeypatch):
         "YTSCRIPT_GLOBAL_DAILY_LIMIT",
     ):
         monkeypatch.delenv(name, raising=False)
-    limiter = limiter_from_env()
+    limiter = memory_limiter_from_env()
     assert (limiter.minute.limit, limiter.minute.window_seconds) == (10, 60.0)
     assert (limiter.daily.limit, limiter.daily.window_seconds) == (100, 86400.0)
     assert (limiter.global_daily.limit, limiter.global_daily.window_seconds) == (2000, 86400.0)
+
+
+REDIS_ENV = (
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN",
+    "KV_REST_API_URL",
+    "KV_REST_API_TOKEN",
+)
+
+
+@pytest.fixture
+def no_redis_env(monkeypatch):
+    for name in REDIS_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_limiter_from_env_uses_memory_without_redis_credentials(no_redis_env):
+    assert isinstance(limiter_from_env(), RateLimiter)
+
+
+def test_limiter_from_env_uses_redis_with_upstash_credentials(no_redis_env, monkeypatch):
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://example.upstash.io")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "token")
+    limiter = limiter_from_env()
+    assert isinstance(limiter, RedisRateLimiter)
+    assert [(l.name, l.limit, l.per_client) for l in limiter._limits] == [
+        ("global", 2000, False),
+        ("daily", 100, True),
+        ("minute", 10, True),
+    ]
+
+
+def test_limiter_from_env_accepts_vercel_kv_names(no_redis_env, monkeypatch):
+    monkeypatch.setenv("KV_REST_API_URL", "https://example.upstash.io")
+    monkeypatch.setenv("KV_REST_API_TOKEN", "token")
+    assert isinstance(limiter_from_env(), RedisRateLimiter)
+
+
+def test_limiter_from_env_needs_both_url_and_token(no_redis_env, monkeypatch):
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://example.upstash.io")
+    assert isinstance(limiter_from_env(), RateLimiter)
