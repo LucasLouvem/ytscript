@@ -1,5 +1,6 @@
 import math
 import os
+import threading
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -10,11 +11,15 @@ from infra.errors import (
     RateLimitExceededError,
     YTScriptError,
 )
+from infra.redis_rate_limiter import RedisLimit, RedisRateLimiter
 
 DEFAULT_LIMIT = 10
 DEFAULT_WINDOW_SECONDS = 60.0
 DEFAULT_DAILY_LIMIT = 100
 DEFAULT_GLOBAL_DAILY_LIMIT = 2000
+DEFAULT_KEY_LIMIT = 30
+DEFAULT_KEY_DAILY_LIMIT = 1000
+DEFAULT_KEY_GLOBAL_DAILY_LIMIT = 5000
 DAY_SECONDS = 86400.0
 GLOBAL_KEY = "global"
 EVICT_THRESHOLD = 1024
@@ -35,23 +40,35 @@ class SlidingWindowRateLimiter:
         self._clock = clock
         self._error_class = error_class
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = threading.RLock()
         self._next_eviction = clock() + window_seconds
 
     def check(self, key: str) -> None:
         """Raises if `key` is over the limit; does not count a hit."""
-        now = self._clock()
-        hits = self._prune(key, now)
-        if len(hits) >= self.limit:
-            raise self._error_class(retry_after=math.ceil(self.window_seconds - (now - hits[0])))
+        with self._lock:
+            now = self._clock()
+            hits = self._prune(key, now)
+            if len(hits) >= self.limit:
+                raise self._error_class(
+                    retry_after=math.ceil(self.window_seconds - (now - hits[0]))
+                )
 
     def hit(self, key: str) -> None:
-        now = self._clock()
-        self._prune(key, now).append(now)
-        if len(self._hits) > EVICT_THRESHOLD and now >= self._next_eviction:
-            self._evict_idle(now)
+        with self._lock:
+            now = self._clock()
+            self._prune(key, now).append(now)
+            if len(self._hits) > EVICT_THRESHOLD and now >= self._next_eviction:
+                self._evict_idle(now)
+
+    def acquire(self, key: str) -> None:
+        """Atomic `check` followed by `hit`."""
+        with self._lock:
+            self.check(key)
+            self.hit(key)
 
     def reset(self) -> None:
-        self._hits.clear()
+        with self._lock:
+            self._hits.clear()
 
     def _prune(self, key: str, now: float) -> deque[float]:
         hits = self._hits[key]
@@ -67,7 +84,7 @@ class SlidingWindowRateLimiter:
 
 
 class RateLimiter:
-    """Applies the global daily, per-IP daily and per-IP minute limits.
+    """Applies the global daily (when set), per-client daily and per-client minute limits.
 
     A blocked request counts for none of them.
     """
@@ -76,27 +93,33 @@ class RateLimiter:
         self,
         minute: SlidingWindowRateLimiter,
         daily: SlidingWindowRateLimiter,
-        global_daily: SlidingWindowRateLimiter,
+        global_daily: SlidingWindowRateLimiter | None = None,
     ) -> None:
         self.minute = minute
         self.daily = daily
         self.global_daily = global_daily
+        self._lock = threading.Lock()
 
     def check(self, key: str) -> None:
-        self.global_daily.check(GLOBAL_KEY)
-        self.daily.check(key)
-        self.minute.check(key)
-        self.global_daily.hit(GLOBAL_KEY)
-        self.daily.hit(key)
-        self.minute.hit(key)
+        with self._lock:
+            if self.global_daily:
+                self.global_daily.check(GLOBAL_KEY)
+            self.daily.check(key)
+            self.minute.check(key)
+            if self.global_daily:
+                self.global_daily.hit(GLOBAL_KEY)
+            self.daily.hit(key)
+            self.minute.hit(key)
 
     def reset(self) -> None:
-        self.minute.reset()
-        self.daily.reset()
-        self.global_daily.reset()
+        with self._lock:
+            self.minute.reset()
+            self.daily.reset()
+            if self.global_daily:
+                self.global_daily.reset()
 
 
-def limiter_from_env() -> RateLimiter:
+def memory_limiter_from_env() -> RateLimiter:
     return RateLimiter(
         minute=SlidingWindowRateLimiter(
             limit=int(os.environ.get("YTSCRIPT_RATE_LIMIT", DEFAULT_LIMIT)),
@@ -112,4 +135,99 @@ def limiter_from_env() -> RateLimiter:
             window_seconds=DAY_SECONDS,
             error_class=GlobalLimitExceededError,
         ),
+    )
+
+
+def memory_key_limiter_from_env() -> RateLimiter:
+    return RateLimiter(
+        minute=SlidingWindowRateLimiter(
+            limit=int(os.environ.get("YTSCRIPT_KEY_RATE_LIMIT", DEFAULT_KEY_LIMIT)),
+            window_seconds=float(os.environ.get("YTSCRIPT_RATE_WINDOW", DEFAULT_WINDOW_SECONDS)),
+        ),
+        daily=SlidingWindowRateLimiter(
+            limit=int(os.environ.get("YTSCRIPT_KEY_DAILY_LIMIT", DEFAULT_KEY_DAILY_LIMIT)),
+            window_seconds=DAY_SECONDS,
+            error_class=DailyLimitExceededError,
+        ),
+        global_daily=SlidingWindowRateLimiter(
+            limit=int(
+                os.environ.get("YTSCRIPT_KEY_GLOBAL_DAILY_LIMIT", DEFAULT_KEY_GLOBAL_DAILY_LIMIT)
+            ),
+            window_seconds=DAY_SECONDS,
+            error_class=GlobalLimitExceededError,
+        ),
+    )
+
+
+def redis_credentials_from_env() -> tuple[str, str] | None:
+    url = os.environ.get("UPSTASH_REDIS_REST_URL") or os.environ.get("KV_REST_API_URL")
+    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
+    return (url, token) if url and token else None
+
+
+def limiter_from_env() -> RateLimiter | RedisRateLimiter:
+    credentials = redis_credentials_from_env()
+    if credentials is None:
+        return memory_limiter_from_env()
+    url, token = credentials
+    return RedisRateLimiter(
+        url,
+        token,
+        limits=[
+            RedisLimit(
+                "global",
+                int(os.environ.get("YTSCRIPT_GLOBAL_DAILY_LIMIT", DEFAULT_GLOBAL_DAILY_LIMIT)),
+                DAY_SECONDS,
+                GlobalLimitExceededError,
+                per_client=False,
+            ),
+            RedisLimit(
+                "daily",
+                int(os.environ.get("YTSCRIPT_DAILY_LIMIT", DEFAULT_DAILY_LIMIT)),
+                DAY_SECONDS,
+                DailyLimitExceededError,
+            ),
+            RedisLimit(
+                "minute",
+                int(os.environ.get("YTSCRIPT_RATE_LIMIT", DEFAULT_LIMIT)),
+                float(os.environ.get("YTSCRIPT_RATE_WINDOW", DEFAULT_WINDOW_SECONDS)),
+                RateLimitExceededError,
+            ),
+        ],
+    )
+
+
+def key_limiter_from_env() -> RateLimiter | RedisRateLimiter:
+    credentials = redis_credentials_from_env()
+    if credentials is None:
+        return memory_key_limiter_from_env()
+    url, token = credentials
+    return RedisRateLimiter(
+        url,
+        token,
+        limits=[
+            RedisLimit(
+                "key-global",
+                int(
+                    os.environ.get(
+                        "YTSCRIPT_KEY_GLOBAL_DAILY_LIMIT", DEFAULT_KEY_GLOBAL_DAILY_LIMIT
+                    )
+                ),
+                DAY_SECONDS,
+                GlobalLimitExceededError,
+                per_client=False,
+            ),
+            RedisLimit(
+                "key-daily",
+                int(os.environ.get("YTSCRIPT_KEY_DAILY_LIMIT", DEFAULT_KEY_DAILY_LIMIT)),
+                DAY_SECONDS,
+                DailyLimitExceededError,
+            ),
+            RedisLimit(
+                "key-minute",
+                int(os.environ.get("YTSCRIPT_KEY_RATE_LIMIT", DEFAULT_KEY_LIMIT)),
+                float(os.environ.get("YTSCRIPT_RATE_WINDOW", DEFAULT_WINDOW_SECONDS)),
+                RateLimitExceededError,
+            ),
+        ],
     )

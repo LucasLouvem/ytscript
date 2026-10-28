@@ -17,7 +17,7 @@ Nada é instalado globalmente; dependências ficam em `requirements*.txt`.
 
 ## Estrutura
 
-MVC sob `src/api/ytscript/` (`models/`, `controllers/`, `views/`; entradas `cli.py` e `api.py`). `web/` é a página estática (HTML/CSS/JS puro, sem build), servida pelo FastAPI. `infra/` fica na **raiz**, fora da API (erros customizados, adaptador do YouTube) e não importa `src/api`. Testes espelham o caminho: `tests/api/ytscript/` e `tests/infra/`. API first: lógica sem dependência de terminal/HTTP.
+MVC sob `src/api/ytscript/` (`models/`, `controllers/`, `views/`; entradas `cli.py` e `api.py`). `public/` é a página estática (HTML/CSS/JS puro, sem build), servida pelo FastAPI localmente e pelo CDN na Vercel. `app.py` na raiz é o entrypoint da Vercel. `infra/` fica na **raiz**, fora da API (erros customizados, adaptador do YouTube) e não importa `src/api`. Testes espelham o caminho: `tests/api/ytscript/` e `tests/infra/`. API first: lógica sem dependência de terminal/HTTP.
 
 ## Regras (detalhes em `docs/`)
 

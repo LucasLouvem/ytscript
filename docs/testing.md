@@ -15,6 +15,7 @@ infra/errors.py                                    -> tests/infra/test_errors.py
 - **Casos de sucesso e de erro**: cada função cobre o caminho feliz e as falhas esperadas (entradas inválidas, erros customizados, códigos de saída).
 - Testes unitários **não acessam a rede**: o YouTube é mockado em `infra.youtube_client.YouTubeTranscriptApi`.
 - `tests/fixtures/player_response_<id>.json` guarda respostas reais (reduzidas) da página de dois vídeos públicos; os testes de metadados usam essas fixtures, sem rede. Contadores como `viewCount` mudam no YouTube; a fixture é um retrato fixo.
+- O Redis da Upstash é mockado em `urllib.request.urlopen` (`tests/infra/test_redis_rate_limiter.py`); o script Lua só é exercitado de verdade em verificação manual contra um Redis real.
 - A API é testada com `TestClient` (FastAPI) e mock do YouTube; erros HTTP comparam status e corpo exatos com `Classe().to_dict()`.
 - Verificação de integração real com o YouTube é manual e nunca bloqueia a suíte.
 - Nomes de testes descrevem o comportamento (`test_prefers_manual_portuguese`).

@@ -141,3 +141,10 @@ class GlobalLimitExceededError(YTScriptError):
     def __init__(self, retry_after: int | None = None) -> None:
         super().__init__()
         self.retry_after = retry_after
+
+
+class InvalidApiKeyError(YTScriptError):
+    name = "InvalidApiKeyError"
+    message = "A chave de API é inválida."
+    action = "Confira o valor do cabeçalho X-API-Key ou remova-o para usar o limite público."
+    status_code = 401
