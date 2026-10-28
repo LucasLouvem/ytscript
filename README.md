@@ -41,6 +41,20 @@ uvicorn ytscript.api:app --port 3000
 
 Abra http://localhost:3000, cole a URL e clique em **Transcrever**. A página mostra título, canal, duração e idioma do vídeo, e permite escolher idioma, formato (`.txt`/`.srt`/`.md`), timestamps, copiar e baixar. A API fica em `POST /api/transcripts` (`{"url": "...", "language"?, "translate_to"?}`) e `GET /api/health`. O `POST` é limitado por IP a 10 requisições por minuto e 100 por dia, com teto global de 2000 por dia (`YTSCRIPT_RATE_LIMIT`, `YTSCRIPT_RATE_WINDOW`, `YTSCRIPT_DAILY_LIMIT`, `YTSCRIPT_GLOBAL_DAILY_LIMIT`); acima disso responde 429. Detalhes em [architecture.md](docs/architecture.md).
 
+### Chave de API (automações)
+
+Para scripts e automações, gere uma chave e informe-a no servidor:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # gera a chave
+export YTSCRIPT_API_KEYS="chave1,chave2"                          # no servidor (várias, separadas por vírgula)
+curl -X POST http://localhost:3000/api/transcripts \
+  -H "Content-Type: application/json" -H "X-API-Key: chave1" \
+  -d '{"url": "https://youtu.be/VIDEO_ID"}'
+```
+
+Com chave valem limites próprios: 30 por minuto e 1000 por dia por chave, 5000 por dia no total (`YTSCRIPT_KEY_RATE_LIMIT`, `YTSCRIPT_KEY_DAILY_LIMIT`, `YTSCRIPT_KEY_GLOBAL_DAILY_LIMIT`). Chave inválida responde 401; chaves com menos de 32 caracteres são ignoradas. Para revogar, retire a chave da lista e faça novo deploy. Nunca commite as chaves.
+
 ### Deploy na Vercel
 
 O FastAPI roda como função Python (entrypoint `app.py`) e `public/` é servida pelo CDN. Como cada requisição pode cair numa instância diferente, o rate limit precisa do Redis: adicione a integração **Upstash Redis** ao projeto (Marketplace da Vercel) e confira em *Settings → Environment Variables* se `UPSTASH_REDIS_REST_URL` e `UPSTASH_REDIS_REST_TOKEN` (ou `KV_REST_API_URL` e `KV_REST_API_TOKEN`) foram criadas. Não há banco de dados nem cron: os contadores expiram sozinhos. Sem essas variáveis o limite cai para a memória do processo e deixa de valer na prática.

@@ -11,13 +11,15 @@ from infra.errors import (
     NetworkError,
     DailyLimitExceededError,
     GlobalLimitExceededError,
+    InvalidApiKeyError,
     RateLimitExceededError,
     TranscriptNotFoundError,
     TranslationNotAvailableError,
     UnsupportedDomainError,
 )
 from ytscript.api import app, client_key
-from ytscript.rate_limiter import memory_limiter_from_env
+from ytscript.api_keys import ApiKeys
+from ytscript.rate_limiter import memory_key_limiter_from_env, memory_limiter_from_env
 from ytscript.models.segment import Segment
 from ytscript.models.transcript import TranscriptDetails, TranscriptTrack
 from ytscript.models.video import VideoInfo
@@ -30,6 +32,18 @@ URL = "https://youtu.be/dQw4w9WgXcQ"
 def rate_limiter(monkeypatch):
     limiter = memory_limiter_from_env()
     monkeypatch.setattr("ytscript.api.rate_limiter", limiter)
+    return limiter
+
+
+KEY = "a" * 40
+OTHER_KEY = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def key_rate_limiter(monkeypatch):
+    limiter = memory_key_limiter_from_env()
+    monkeypatch.setattr("ytscript.api.key_rate_limiter", limiter)
+    monkeypatch.setattr("ytscript.api.api_keys", ApiKeys([KEY, OTHER_KEY]))
     return limiter
 
 
@@ -262,3 +276,110 @@ def test_blocked_requests_never_reach_the_transcript_controller(client, rate_lim
         for _ in range(rate_limiter.minute.limit + 15):
             client.post("/api/transcripts", json={"url": URL})
     assert get.call_count == rate_limiter.minute.limit
+
+
+def post(client, key=None):
+    headers = {"X-API-Key": key} if key is not None else {}
+    return client.post("/api/transcripts", json={"url": URL}, headers=headers)
+
+
+def test_valid_key_uses_its_own_limits_not_the_public_ones(client, rate_limiter):
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        for _ in range(rate_limiter.minute.limit + 5):
+            assert post(client, KEY).status_code == 200
+        assert post(client).status_code == 200
+
+
+def test_valid_key_requests_do_not_consume_the_public_quota(client, rate_limiter):
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        for _ in range(20):
+            post(client, KEY)
+        for _ in range(rate_limiter.minute.limit):
+            assert post(client).status_code == 200
+        assert post(client).status_code == 429
+
+
+def test_key_is_limited_per_minute_with_retry_after(client, key_rate_limiter):
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        for _ in range(key_rate_limiter.minute.limit):
+            assert post(client, KEY).status_code == 200
+        response = post(client, KEY)
+
+    assert response.status_code == 429
+    assert response.json() == RateLimitExceededError().to_dict()
+    assert int(response.headers["Retry-After"]) > 0
+
+
+def test_key_is_limited_per_day(client, key_rate_limiter, monkeypatch):
+    monkeypatch.setattr(key_rate_limiter.daily, "limit", 2)
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        assert post(client, KEY).status_code == 200
+        assert post(client, KEY).status_code == 200
+        response = post(client, KEY)
+
+    assert response.status_code == 429
+    assert response.json() == DailyLimitExceededError().to_dict()
+
+
+def test_keys_have_independent_limits(client, key_rate_limiter, monkeypatch):
+    monkeypatch.setattr(key_rate_limiter.minute, "limit", 1)
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        assert post(client, KEY).status_code == 200
+        assert post(client, KEY).status_code == 429
+        assert post(client, OTHER_KEY).status_code == 200
+
+
+def test_all_keys_together_are_capped_by_the_keys_global_limit(
+    client, key_rate_limiter, monkeypatch
+):
+    monkeypatch.setattr(key_rate_limiter.global_daily, "limit", 2)
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        assert post(client, KEY).status_code == 200
+        assert post(client, OTHER_KEY).status_code == 200
+        response = post(client, KEY)
+
+    assert response.status_code == 429
+    assert response.json() == GlobalLimitExceededError().to_dict()
+
+
+def test_unknown_key_gets_401_with_exact_body_and_never_reaches_the_controller(client):
+    with patch("ytscript.api.get_transcript_details") as get:
+        response = post(client, "c" * 40)
+
+    assert response.status_code == 401
+    assert response.json() == InvalidApiKeyError().to_dict()
+    get.assert_not_called()
+
+
+def test_key_header_is_rejected_when_the_server_has_no_keys(client, monkeypatch):
+    monkeypatch.setattr("ytscript.api.api_keys", ApiKeys([]))
+    assert post(client, KEY).status_code == 401
+
+
+def test_invalid_key_does_not_fall_back_to_the_public_limits(client):
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS) as get:
+        assert post(client, "c" * 40).status_code == 401
+        get.assert_not_called()
+
+
+def test_invalid_key_attempts_count_against_the_public_ip_limit(client, rate_limiter):
+    for _ in range(rate_limiter.minute.limit):
+        assert post(client, "c" * 40).status_code == 401
+    response = post(client, "c" * 40)
+
+    assert response.status_code == 429
+    assert response.json() == RateLimitExceededError().to_dict()
+
+
+def test_blocked_key_request_never_reaches_the_controller(client, key_rate_limiter):
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS) as get:
+        for _ in range(key_rate_limiter.minute.limit + 10):
+            post(client, KEY)
+    assert get.call_count == key_rate_limiter.minute.limit
+
+
+def test_raw_key_never_appears_in_limiter_state(client, key_rate_limiter):
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        post(client, KEY)
+    assert KEY not in repr(key_rate_limiter.minute._hits)
+    assert KEY not in repr(key_rate_limiter.daily._hits)

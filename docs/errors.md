@@ -27,6 +27,7 @@ O corpo é **fixo por classe**: nenhum código monta texto de erro avulso; para 
 | `RateLimitExceededError` | 429 | limite de requisições da API excedido; a resposta traz `Retry-After` |
 | `DailyLimitExceededError` | 429 | limite diário (24 h) de requisições da API excedido; a resposta traz `Retry-After` |
 | `GlobalLimitExceededError` | 429 | teto diário (24 h) somado de todos os usuários excedido; a resposta traz `Retry-After` |
+| `InvalidApiKeyError` | 401 | cabeçalho `X-API-Key` presente com chave desconhecida (ou nenhuma chave configurada no servidor) |
 | `AccessBlockedError` | 429 | YouTube bloqueou/limitou o acesso |
 | `NetworkError` | 502 | falha de rede |
 | `TranscriptRetrievalError` | 502 | falha genérica ao obter a transcrição |

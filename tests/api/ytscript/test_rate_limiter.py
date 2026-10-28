@@ -9,7 +9,9 @@ from infra.redis_rate_limiter import RedisRateLimiter
 from ytscript.rate_limiter import (
     RateLimiter,
     SlidingWindowRateLimiter,
+    key_limiter_from_env,
     limiter_from_env,
+    memory_key_limiter_from_env,
     memory_limiter_from_env,
 )
 
@@ -300,3 +302,59 @@ def test_idle_clients_do_not_grow_memory_without_bound(monkeypatch):
         clock.now = second
         use(limiter, f"ip{second}")
     assert len(limiter._hits) < 300
+
+
+def test_key_limits_are_strict_by_default(monkeypatch):
+    for name in (
+        "YTSCRIPT_KEY_RATE_LIMIT",
+        "YTSCRIPT_KEY_DAILY_LIMIT",
+        "YTSCRIPT_KEY_GLOBAL_DAILY_LIMIT",
+        "YTSCRIPT_RATE_WINDOW",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    limiter = memory_key_limiter_from_env()
+    assert limiter.minute.limit == 30
+    assert limiter.daily.limit == 1000
+    assert limiter.global_daily.limit == 5000
+
+
+def test_key_limits_come_from_env(monkeypatch):
+    monkeypatch.setenv("YTSCRIPT_KEY_RATE_LIMIT", "5")
+    monkeypatch.setenv("YTSCRIPT_KEY_DAILY_LIMIT", "50")
+    monkeypatch.setenv("YTSCRIPT_KEY_GLOBAL_DAILY_LIMIT", "70")
+    limiter = memory_key_limiter_from_env()
+    assert (limiter.minute.limit, limiter.daily.limit, limiter.global_daily.limit) == (5, 50, 70)
+
+
+def test_key_limiter_uses_memory_without_redis_credentials(no_redis_env):
+    assert isinstance(key_limiter_from_env(), RateLimiter)
+
+
+def test_key_limiter_uses_redis_with_separate_key_namespaces(no_redis_env, monkeypatch):
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://example.upstash.io")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "token")
+    monkeypatch.delenv("YTSCRIPT_KEY_RATE_LIMIT", raising=False)
+    monkeypatch.delenv("YTSCRIPT_KEY_DAILY_LIMIT", raising=False)
+    monkeypatch.delenv("YTSCRIPT_KEY_GLOBAL_DAILY_LIMIT", raising=False)
+    public = {l.name for l in limiter_from_env()._limits}
+    keyed = key_limiter_from_env()
+    assert [(l.name, l.limit, l.per_client) for l in keyed._limits] == [
+        ("key-global", 5000, False),
+        ("key-daily", 1000, True),
+        ("key-minute", 30, True),
+    ]
+    assert public.isdisjoint(l.name for l in keyed._limits)
+
+
+def test_limiter_without_global_cap_still_limits_per_client():
+    clock = FakeClock()
+    limiter = RateLimiter(
+        SlidingWindowRateLimiter(1, 60, clock),
+        SlidingWindowRateLimiter(5, 86400, clock, DailyLimitExceededError),
+    )
+    limiter.check("a")
+    with pytest.raises(RateLimitExceededError):
+        limiter.check("a")
+    limiter.check("b")
+    limiter.reset()
+    limiter.check("a")

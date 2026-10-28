@@ -64,6 +64,12 @@ EXPECTED_BODIES = {
         "action": "Tente novamente mais tarde.",
         "status_code": 429,
     },
+    errors.InvalidApiKeyError: {
+        "name": "InvalidApiKeyError",
+        "message": "A chave de API é inválida.",
+        "action": "Confira o valor do cabeçalho X-API-Key ou remova-o para usar o limite público.",
+        "status_code": 401,
+    },
     errors.AccessBlockedError: {
         "name": "AccessBlockedError",
         "message": "O YouTube bloqueou ou limitou o acesso.",

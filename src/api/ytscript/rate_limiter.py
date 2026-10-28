@@ -17,6 +17,9 @@ DEFAULT_LIMIT = 10
 DEFAULT_WINDOW_SECONDS = 60.0
 DEFAULT_DAILY_LIMIT = 100
 DEFAULT_GLOBAL_DAILY_LIMIT = 2000
+DEFAULT_KEY_LIMIT = 30
+DEFAULT_KEY_DAILY_LIMIT = 1000
+DEFAULT_KEY_GLOBAL_DAILY_LIMIT = 5000
 DAY_SECONDS = 86400.0
 GLOBAL_KEY = "global"
 EVICT_THRESHOLD = 1024
@@ -81,7 +84,7 @@ class SlidingWindowRateLimiter:
 
 
 class RateLimiter:
-    """Applies the global daily, per-IP daily and per-IP minute limits.
+    """Applies the global daily (when set), per-client daily and per-client minute limits.
 
     A blocked request counts for none of them.
     """
@@ -90,7 +93,7 @@ class RateLimiter:
         self,
         minute: SlidingWindowRateLimiter,
         daily: SlidingWindowRateLimiter,
-        global_daily: SlidingWindowRateLimiter,
+        global_daily: SlidingWindowRateLimiter | None = None,
     ) -> None:
         self.minute = minute
         self.daily = daily
@@ -99,10 +102,12 @@ class RateLimiter:
 
     def check(self, key: str) -> None:
         with self._lock:
-            self.global_daily.check(GLOBAL_KEY)
+            if self.global_daily:
+                self.global_daily.check(GLOBAL_KEY)
             self.daily.check(key)
             self.minute.check(key)
-            self.global_daily.hit(GLOBAL_KEY)
+            if self.global_daily:
+                self.global_daily.hit(GLOBAL_KEY)
             self.daily.hit(key)
             self.minute.hit(key)
 
@@ -110,7 +115,8 @@ class RateLimiter:
         with self._lock:
             self.minute.reset()
             self.daily.reset()
-            self.global_daily.reset()
+            if self.global_daily:
+                self.global_daily.reset()
 
 
 def memory_limiter_from_env() -> RateLimiter:
@@ -126,6 +132,27 @@ def memory_limiter_from_env() -> RateLimiter:
         ),
         global_daily=SlidingWindowRateLimiter(
             limit=int(os.environ.get("YTSCRIPT_GLOBAL_DAILY_LIMIT", DEFAULT_GLOBAL_DAILY_LIMIT)),
+            window_seconds=DAY_SECONDS,
+            error_class=GlobalLimitExceededError,
+        ),
+    )
+
+
+def memory_key_limiter_from_env() -> RateLimiter:
+    return RateLimiter(
+        minute=SlidingWindowRateLimiter(
+            limit=int(os.environ.get("YTSCRIPT_KEY_RATE_LIMIT", DEFAULT_KEY_LIMIT)),
+            window_seconds=float(os.environ.get("YTSCRIPT_RATE_WINDOW", DEFAULT_WINDOW_SECONDS)),
+        ),
+        daily=SlidingWindowRateLimiter(
+            limit=int(os.environ.get("YTSCRIPT_KEY_DAILY_LIMIT", DEFAULT_KEY_DAILY_LIMIT)),
+            window_seconds=DAY_SECONDS,
+            error_class=DailyLimitExceededError,
+        ),
+        global_daily=SlidingWindowRateLimiter(
+            limit=int(
+                os.environ.get("YTSCRIPT_KEY_GLOBAL_DAILY_LIMIT", DEFAULT_KEY_GLOBAL_DAILY_LIMIT)
+            ),
             window_seconds=DAY_SECONDS,
             error_class=GlobalLimitExceededError,
         ),
@@ -163,6 +190,42 @@ def limiter_from_env() -> RateLimiter | RedisRateLimiter:
             RedisLimit(
                 "minute",
                 int(os.environ.get("YTSCRIPT_RATE_LIMIT", DEFAULT_LIMIT)),
+                float(os.environ.get("YTSCRIPT_RATE_WINDOW", DEFAULT_WINDOW_SECONDS)),
+                RateLimitExceededError,
+            ),
+        ],
+    )
+
+
+def key_limiter_from_env() -> RateLimiter | RedisRateLimiter:
+    credentials = redis_credentials_from_env()
+    if credentials is None:
+        return memory_key_limiter_from_env()
+    url, token = credentials
+    return RedisRateLimiter(
+        url,
+        token,
+        limits=[
+            RedisLimit(
+                "key-global",
+                int(
+                    os.environ.get(
+                        "YTSCRIPT_KEY_GLOBAL_DAILY_LIMIT", DEFAULT_KEY_GLOBAL_DAILY_LIMIT
+                    )
+                ),
+                DAY_SECONDS,
+                GlobalLimitExceededError,
+                per_client=False,
+            ),
+            RedisLimit(
+                "key-daily",
+                int(os.environ.get("YTSCRIPT_KEY_DAILY_LIMIT", DEFAULT_KEY_DAILY_LIMIT)),
+                DAY_SECONDS,
+                DailyLimitExceededError,
+            ),
+            RedisLimit(
+                "key-minute",
+                int(os.environ.get("YTSCRIPT_KEY_RATE_LIMIT", DEFAULT_KEY_LIMIT)),
                 float(os.environ.get("YTSCRIPT_RATE_WINDOW", DEFAULT_WINDOW_SECONDS)),
                 RateLimitExceededError,
             ),
