@@ -1,0 +1,170 @@
+import pytest
+
+from infra.errors import DailyLimitExceededError, GlobalLimitExceededError, RateLimitExceededError
+from ytscript.rate_limiter import RateLimiter, SlidingWindowRateLimiter, limiter_from_env
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def make(limit=2, window=60.0):
+    clock = FakeClock()
+    return SlidingWindowRateLimiter(limit, window, clock), clock
+
+
+def use(limiter, key):
+    limiter.check(key)
+    limiter.hit(key)
+
+
+def test_allows_up_to_limit():
+    limiter, _ = make(limit=2)
+    use(limiter, "a")
+    use(limiter, "a")
+
+
+def test_blocks_over_limit_with_exact_body_and_retry_after():
+    limiter, clock = make(limit=2, window=60)
+    use(limiter, "a")
+    clock.now = 10
+    use(limiter, "a")
+    clock.now = 20
+    with pytest.raises(RateLimitExceededError) as exc:
+        limiter.check("a")
+    assert exc.value.to_dict() == RateLimitExceededError().to_dict()
+    assert exc.value.retry_after == 40
+
+
+def test_allows_again_after_window():
+    limiter, clock = make(limit=1, window=60)
+    use(limiter, "a")
+    clock.now = 60
+    use(limiter, "a")
+
+
+def test_keys_are_independent():
+    limiter, _ = make(limit=1)
+    use(limiter, "a")
+    use(limiter, "b")
+
+
+def test_check_alone_does_not_count():
+    limiter, _ = make(limit=1)
+    limiter.check("a")
+    limiter.check("a")
+
+
+def test_idle_keys_are_evicted(monkeypatch):
+    monkeypatch.setattr("ytscript.rate_limiter.EVICT_THRESHOLD", 2)
+    limiter, clock = make(limit=1, window=60)
+    for key in ("a", "b", "c"):
+        use(limiter, key)
+    clock.now = 61
+    use(limiter, "d")
+    assert set(limiter._hits) == {"d"}
+
+
+def make_pair(minute_limit=2, daily_limit=3, global_limit=1000):
+    clock = FakeClock()
+    minute = SlidingWindowRateLimiter(minute_limit, 60, clock)
+    daily = SlidingWindowRateLimiter(daily_limit, 86400, clock, DailyLimitExceededError)
+    global_daily = SlidingWindowRateLimiter(global_limit, 86400, clock, GlobalLimitExceededError)
+    return RateLimiter(minute, daily, global_daily), clock
+
+
+def test_daily_limit_blocks_even_when_minute_window_is_free():
+    limiter, clock = make_pair(minute_limit=2, daily_limit=3)
+    for second in (0, 100, 200):
+        clock.now = second
+        limiter.check("a")
+    clock.now = 300
+    with pytest.raises(DailyLimitExceededError) as exc:
+        limiter.check("a")
+    assert exc.value.to_dict() == DailyLimitExceededError().to_dict()
+    assert exc.value.retry_after == 86400 - 300
+
+
+def test_daily_limit_resets_after_a_day():
+    limiter, clock = make_pair(minute_limit=5, daily_limit=1)
+    limiter.check("a")
+    clock.now = 86400
+    limiter.check("a")
+
+
+def test_minute_limit_still_applies_before_daily():
+    limiter, _ = make_pair(minute_limit=1, daily_limit=5)
+    limiter.check("a")
+    with pytest.raises(RateLimitExceededError):
+        limiter.check("a")
+
+
+def test_blocked_request_counts_for_neither_limit():
+    limiter, clock = make_pair(minute_limit=1, daily_limit=2)
+    limiter.check("a")
+    for second in (10, 20):
+        clock.now = second
+        with pytest.raises(RateLimitExceededError):
+            limiter.check("a")
+    clock.now = 60
+    limiter.check("a")
+    clock.now = 120
+    with pytest.raises(DailyLimitExceededError):
+        limiter.check("a")
+
+
+def test_global_limit_sums_all_keys_and_blocks_new_ones():
+    limiter, clock = make_pair(minute_limit=5, daily_limit=5, global_limit=2)
+    limiter.check("a")
+    limiter.check("b")
+    clock.now = 100
+    with pytest.raises(GlobalLimitExceededError) as exc:
+        limiter.check("c")
+    assert exc.value.to_dict() == GlobalLimitExceededError().to_dict()
+    assert exc.value.retry_after == 86400 - 100
+
+
+def test_global_limit_resets_after_a_day():
+    limiter, clock = make_pair(global_limit=1)
+    limiter.check("a")
+    clock.now = 86400
+    limiter.check("b")
+
+
+def test_request_blocked_per_ip_does_not_use_global_quota():
+    limiter, clock = make_pair(minute_limit=1, global_limit=2)
+    limiter.check("a")
+    for second in (1, 2, 3):
+        clock.now = second
+        with pytest.raises(RateLimitExceededError):
+            limiter.check("a")
+    limiter.check("b")
+
+
+def test_limiter_from_env(monkeypatch):
+    monkeypatch.setenv("YTSCRIPT_RATE_LIMIT", "3")
+    monkeypatch.setenv("YTSCRIPT_RATE_WINDOW", "5")
+    monkeypatch.setenv("YTSCRIPT_DAILY_LIMIT", "7")
+    monkeypatch.setenv("YTSCRIPT_GLOBAL_DAILY_LIMIT", "50")
+    limiter = limiter_from_env()
+    assert (limiter.minute.limit, limiter.minute.window_seconds) == (3, 5.0)
+    assert (limiter.daily.limit, limiter.daily.window_seconds) == (7, 86400.0)
+    assert (limiter.global_daily.limit, limiter.global_daily.window_seconds) == (50, 86400.0)
+
+
+def test_limiter_from_env_defaults(monkeypatch):
+    for name in (
+        "YTSCRIPT_RATE_LIMIT",
+        "YTSCRIPT_RATE_WINDOW",
+        "YTSCRIPT_DAILY_LIMIT",
+        "YTSCRIPT_GLOBAL_DAILY_LIMIT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    limiter = limiter_from_env()
+    assert (limiter.minute.limit, limiter.minute.window_seconds) == (10, 60.0)
+    assert (limiter.daily.limit, limiter.daily.window_seconds) == (100, 86400.0)
+    assert (limiter.global_daily.limit, limiter.global_daily.window_seconds) == (2000, 86400.0)

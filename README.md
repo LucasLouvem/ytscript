@@ -39,7 +39,7 @@ Transcrição no `stdout`; erros no `stderr`. Saída: `0` sucesso, `1` erro, `2`
 uvicorn ytscript.api:app --port 3000
 ```
 
-Abra http://localhost:3000, cole a URL e clique em **Transcrever**. A página mostra título, canal, duração e idioma do vídeo, e permite escolher idioma, formato (`.txt`/`.srt`/`.md`), timestamps, copiar e baixar. A API fica em `POST /api/transcripts` (`{"url": "...", "language"?, "translate_to"?}`) e `GET /api/health`. Detalhes em [architecture.md](docs/architecture.md).
+Abra http://localhost:3000, cole a URL e clique em **Transcrever**. A página mostra título, canal, duração e idioma do vídeo, e permite escolher idioma, formato (`.txt`/`.srt`/`.md`), timestamps, copiar e baixar. A API fica em `POST /api/transcripts` (`{"url": "...", "language"?, "translate_to"?}`) e `GET /api/health`. O `POST` é limitado por IP a 10 requisições por minuto e 100 por dia, com teto global de 2000 por dia (`YTSCRIPT_RATE_LIMIT`, `YTSCRIPT_RATE_WINDOW`, `YTSCRIPT_DAILY_LIMIT`, `YTSCRIPT_GLOBAL_DAILY_LIMIT`); acima disso responde 429. Detalhes em [architecture.md](docs/architecture.md).
 
 ## Desenvolvimento
 

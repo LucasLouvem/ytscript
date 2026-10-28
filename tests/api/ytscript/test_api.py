@@ -7,17 +7,27 @@ from infra.errors import (
     InvalidUrlError,
     LanguageNotAvailableError,
     NetworkError,
+    DailyLimitExceededError,
+    GlobalLimitExceededError,
+    RateLimitExceededError,
     TranscriptNotFoundError,
     TranslationNotAvailableError,
     UnsupportedDomainError,
 )
-from ytscript.api import app
+from ytscript.api import app, rate_limiter
 from ytscript.models.segment import Segment
 from ytscript.models.transcript import TranscriptDetails, TranscriptTrack
 from ytscript.models.video import VideoInfo
 from ytscript.views.transcript_view import build_details_payload
 
 URL = "https://youtu.be/dQw4w9WgXcQ"
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    rate_limiter.reset()
+    yield
+    rate_limiter.reset()
 
 
 @pytest.fixture
@@ -153,3 +163,42 @@ def test_serves_static_assets(client, path):
 
 def test_unknown_api_route_is_not_found(client):
     assert client.get("/api/inexistente").status_code == 404
+
+
+def test_create_transcript_is_rate_limited_per_client(client):
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        for _ in range(rate_limiter.minute.limit):
+            assert client.post("/api/transcripts", json={"url": URL}).status_code == 200
+        response = client.post("/api/transcripts", json={"url": URL})
+
+    assert response.status_code == 429
+    assert response.json() == RateLimitExceededError().to_dict()
+    assert 1 <= int(response.headers["Retry-After"]) <= rate_limiter.minute.window_seconds
+
+
+def test_health_is_not_rate_limited(client):
+    for _ in range(rate_limiter.minute.limit + 1):
+        assert client.get("/api/health").status_code == 200
+
+
+def test_create_transcript_is_blocked_by_daily_limit(client, monkeypatch):
+    monkeypatch.setattr(rate_limiter.daily, "limit", 2)
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        for _ in range(2):
+            assert client.post("/api/transcripts", json={"url": URL}).status_code == 200
+        response = client.post("/api/transcripts", json={"url": URL})
+
+    assert response.status_code == 429
+    assert response.json() == DailyLimitExceededError().to_dict()
+    assert int(response.headers["Retry-After"]) > 0
+
+
+def test_create_transcript_is_blocked_by_global_limit(client, monkeypatch):
+    monkeypatch.setattr(rate_limiter.global_daily, "limit", 1)
+    with patch("ytscript.api.get_transcript_details", return_value=DETAILS):
+        assert client.post("/api/transcripts", json={"url": URL}).status_code == 200
+        response = client.post("/api/transcripts", json={"url": URL})
+
+    assert response.status_code == 429
+    assert response.json() == GlobalLimitExceededError().to_dict()
+    assert int(response.headers["Retry-After"]) > 0

@@ -52,11 +52,13 @@ Resposta `200`:
 - `end` e o SRT usam `start + duration`, limitado ao início do segmento seguinte para não haver sobreposição.
 - O CLI continua sem buscar metadados (usa `get_transcript`); a API usa `get_transcript_details`.
 
+Rate limit: `POST /api/transcripts` tem três limites, todos em janela deslizante (`ytscript/rate_limiter.py`, em memória, por processo): 10 requisições por 60 s (`RateLimitExceededError`) e 100 por 24 h (`DailyLimitExceededError`), ambos por IP do cliente, mais um teto global de 2000 por 24 h somando todos os IPs (`GlobalLimitExceededError`). Acima disso responde `429` com o cabeçalho `Retry-After` (segundos). Requisição bloqueada não conta em nenhum dos limites; o global é verificado primeiro. Configurável por `YTSCRIPT_RATE_LIMIT`, `YTSCRIPT_RATE_WINDOW` `YTSCRIPT_DAILY_LIMIT` e `YTSCRIPT_GLOBAL_DAILY_LIMIT`. O CLI e `/api/health` não são limitados.
+
 Erros: corpo `{name, message, action, status_code}` com o HTTP status do próprio erro (ver [errors.md](errors.md)). Corpo da requisição inválido (sem `url`, tipo errado) responde como `InvalidUrlError` (400). O endpoint é `def` (não `async`) porque a `youtube-transcript-api` é síncrona e bloquearia o event loop.
 
 A página (`web/`) usa essas respostas: prévia, informações, listas de idioma e tradução (preenchidas com `tracks`), formato `.txt`/`.srt`/`.md` e timestamps (no cliente; só o `.txt` respeita o toggle, SRT e Markdown sempre levam timestamps), Copiar e Baixar.
 
-Fora do escopo por enquanto: rate limit, proxy contra bloqueio de IP, CORS, autenticação, identificação de falantes (o YouTube não fornece).
+Fora do escopo por enquanto: rate limit compartilhado entre processos/instâncias e atrás de proxy reverso (o IP vem de `request.client`), proxy contra bloqueio de IP, CORS, autenticação, identificação de falantes (o YouTube não fornece).
 
 ## Fluxo
 
